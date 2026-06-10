@@ -9,6 +9,7 @@ import android.provider.MediaStore
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
+import java.io.File
 
 class MainActivity : FlutterActivity() {
     private val CHANNEL = "com.example.safelocker_app/media"
@@ -42,11 +43,11 @@ class MainActivity : FlutterActivity() {
                 }
 
                 "deleteFile" -> {
-                    val fileName = call.argument<String>("fileName")
-                    if (fileName != null) {
-                        requestDeleteFile(fileName, result)
+                    val filePath = call.argument<String>("filePath")  // ✅ FIXED: Changed to filePath
+                    if (filePath != null) {
+                        requestDeleteFile(filePath, result)
                     } else {
-                        result.error("INVALID", "No fileName", null)
+                        result.error("INVALID", "No filePath", null)
                     }
                 }
 
@@ -124,7 +125,7 @@ class MainActivity : FlutterActivity() {
         }
     }
 
-    // ── Open file using FULL PATH (NEW - THIS IS THE FIX!) ──
+    // ── Open file using FULL PATH ──
     private fun openFileWithPath(
         filePath: String,
         result: MethodChannel.Result
@@ -170,13 +171,26 @@ class MainActivity : FlutterActivity() {
         }
     }
 
-    // ── Request delete via Android system dialog ─────────────
+    // ── Request delete via Android system dialog (FIXED for filePath) ─────────────
     private fun requestDeleteFile(
-        fileName: String,
+        filePath: String,  // ✅ FIXED: Changed parameter name and usage
         result: MethodChannel.Result
     ) {
         try {
+            // First, try direct file deletion for files outside MediaStore
+            val file = File(filePath)
+            if (file.exists()) {
+                // Try direct deletion first
+                if (file.delete()) {
+                    result.success("deleted")
+                    return
+                }
+            }
+
+            // If direct deletion fails, try MediaStore (for gallery files)
+            val fileName = file.name
             val uri = findMediaUri(fileName)
+            
             if (uri == null) {
                 result.success("not_found")
                 return
