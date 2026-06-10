@@ -20,11 +20,10 @@ class FileService {
   static String? _originalFilePath;
   static String? _originalFileName;
 
-  // ── Native MediaStore channel ─────────────────────────────
+  // ── FIXED: Native MediaStore channel with proper file path support ────────
   static const _mediaChannel =
-  MethodChannel('com.example.safelocker_app/media');
+      MethodChannel('com.example.safelocker_app/media');
 
-  // ── Pick any file ────────────────────────────────────────
   // ── Pick any file ────────────────────────────────────────
   static Future<PlatformFile?> pickFile() async {
     _lastPickedAsset = null;
@@ -42,7 +41,7 @@ class FileService {
     _originalFilePath = picked.path;
 
     debugPrint('Picked: ${picked.name}');
-    debugPrint('Original path: ${picked.path}');  // ← ADD THIS
+    debugPrint('Original path: ${picked.path}');
 
     return picked;
   }
@@ -72,11 +71,51 @@ class FileService {
   // ── Get stored original file name ────────────────────────
   static String? get originalFileName => _originalFileName;
 
-  // ── Open original file in gallery/viewer ─────────────────
-  // Works for images, videos, audio, PDFs, documents
-  // ── Open original file using FULL PATH ─────────────────
-// 🔥 ADD THIS NEW FUNCTION HERE:
-  // ── Open file directly using Flutter's open_filex ────────────
+  // ── FIXED: Request official delete using platform channel ─────────
+  // This properly handles Android 11+ file deletion
+  // Returns: true if deleted, false otherwise
+  static Future<bool> requestOfficialDelete(
+      String filePath, dynamic context) async {
+    try {
+      debugPrint('=== DELETE ORIGINAL START ===');
+      debugPrint('File path: $filePath');
+
+      if (filePath.isEmpty) {
+        debugPrint('❌ Empty file path');
+        return false;
+      }
+
+      // Call native Android code with file path
+      final result = await _mediaChannel.invokeMethod<String>(
+        'deleteFile',
+        {'filePath': filePath},
+      );
+
+      debugPrint('Delete result: $result');
+
+      if (result == 'deleted') {
+        debugPrint('✅ File deleted successfully');
+        return true;
+      } else if (result == 'cancelled') {
+        debugPrint('⚠️ User cancelled deletion');
+        return false;
+      } else if (result == 'not_found') {
+        debugPrint('⚠️ File not found');
+        return false;
+      } else {
+        debugPrint('❌ Deletion failed');
+        return false;
+      }
+    } on PlatformException catch (e) {
+      debugPrint('Platform exception: ${e.message}');
+      return false;
+    } catch (e) {
+      debugPrint('Error requesting delete: $e');
+      return false;
+    }
+  }
+
+  // ── Open file directly using Flutter's open_filex ────────────────
   static Future<String> openOriginalFileInGalleryWithPath(
       String filePath) async {
     try {
@@ -102,25 +141,6 @@ class FileService {
       }
     } catch (e) {
       debugPrint('Open file error: $e');
-      return 'failed';
-    }
-  }
-
-  // ── Request delete via Android system dialog ─────────────
-  // Returns: "deleted", "cancelled", "not_found", "failed"
-  static Future<String> requestDeleteOriginal(
-      String fileName) async {
-    try {
-      debugPrint('Requesting delete for: $fileName');
-      final result = await _mediaChannel
-          .invokeMethod<String>(
-        'deleteFile',
-        {'fileName': fileName},
-      );
-      debugPrint('Delete result: $result');
-      return result ?? 'failed';
-    } catch (e) {
-      debugPrint('Delete request error: $e');
       return 'failed';
     }
   }
@@ -160,15 +180,14 @@ class FileService {
     if (mimeType.startsWith('image/')) {
       try {
         final compressed =
-        await FlutterImageCompress.compressWithList(
+            await FlutterImageCompress.compressWithList(
           bytes,
           minHeight: 1024,
           minWidth: 1024,
           quality: 70,
         );
         debugPrint(
-            'Compressed: ${bytes.length} -> '
-                '${compressed?.length ?? 0} bytes');
+            'Compressed: ${bytes.length} -> ${compressed?.length ?? 0} bytes');
         return compressed ?? bytes;
       } catch (e) {
         debugPrint('Compression failed: $e');
@@ -193,7 +212,7 @@ class FileService {
       fileBytes = pickedFile.bytes!;
     } else if (pickedFile.path != null) {
       fileBytes =
-      await File(pickedFile.path!).readAsBytes();
+          await File(pickedFile.path!).readAsBytes();
     } else {
       throw Exception('Cannot read file');
     }
@@ -201,27 +220,26 @@ class FileService {
     onProgress(0.15);
     final mimeType = pickedFile.extension != null
         ? lookupMimeType(
-        'file.${pickedFile.extension}') ??
-        lookupMimeType(pickedFile.name) ??
-        'application/octet-stream'
+                'file.${pickedFile.extension}') ??
+            lookupMimeType(pickedFile.name) ??
+            'application/octet-stream'
         : lookupMimeType(pickedFile.name) ??
-        'application/octet-stream';
+            'application/octet-stream';
     final category =
-    getCategory(mimeType, pickedFile.name);
+        getCategory(mimeType, pickedFile.name);
 
     if (backupToCloud && category == 'video') {
       throw Exception(
-          'Videos cannot be backed up to cloud '
-              'due to storage limits.');
+          'Videos cannot be backed up to cloud due to storage limits.');
     }
 
     if (backupToCloud) {
       final currentUsed =
-      await DatabaseService.getUserStorageUsed(
-          userId);
+          await DatabaseService.getUserStorageUsed(
+              userId);
       final limit =
-      await DatabaseService.getUserStorageLimit(
-          userId);
+          await DatabaseService.getUserStorageLimit(
+              userId);
       int estimatedSize = fileBytes.length;
       if (category == 'image') {
         estimatedSize =
@@ -229,15 +247,13 @@ class FileService {
       }
       if (currentUsed + estimatedSize > limit) {
         throw Exception(
-            'Storage limit exceeded '
-                '(${(limit / 1024 / 1024).toInt()} MB). '
-                'Delete some files.');
+            'Storage limit exceeded (${(limit / 1024 / 1024).toInt()} MB). Delete some files.');
       }
     }
 
     onProgress(0.2);
     final compressedBytes =
-    await compressFile(fileBytes, mimeType);
+        await compressFile(fileBytes, mimeType);
     final compressedSize = compressedBytes.length;
 
     debugPrint(
@@ -247,29 +263,28 @@ class FileService {
 
     onProgress(0.4);
     final encryptedBytes =
-    EncryptionService.encryptFile(compressedBytes);
+        EncryptionService.encryptFile(compressedBytes);
 
     onProgress(0.6);
     final appDir =
-    await getApplicationDocumentsDirectory();
+        await getApplicationDocumentsDirectory();
     final vaultDir =
-    Directory(p.join(appDir.path, 'vault', userId));
+        Directory(p.join(appDir.path, 'vault', userId));
     if (!await vaultDir.exists()) {
       await vaultDir.create(recursive: true);
     }
     final fileName =
-        '${DateTime.now().millisecondsSinceEpoch}_'
-        '${pickedFile.name}.enc';
+        '${DateTime.now().millisecondsSinceEpoch}_${pickedFile.name}.enc';
     final encryptedFile =
-    File(p.join(vaultDir.path, fileName));
+        File(p.join(vaultDir.path, fileName));
     await encryptedFile.writeAsBytes(encryptedBytes);
 
     onProgress(0.7);
     String? cloudPath;
     if (backupToCloud) {
       final used =
-      await DatabaseService.getCloudStorageUsed(
-          userId);
+          await DatabaseService.getCloudStorageUsed(
+              userId);
       if (used + compressedSize > maxCloudBytes) {
         throw Exception(
             'Cloud storage limit reached (200MB)');
@@ -278,12 +293,14 @@ class FileService {
       await Supabase.instance.client.storage
           .from('vault-files')
           .uploadBinary(cloudPath, encryptedBytes);
+
       final newTotal = used + compressedSize;
       await DatabaseService.updateUserStorageUsed(
           userId, newTotal);
     }
 
     onProgress(0.9);
+
     final fileModel = FileModel(
       userId: userId,
       displayName: displayName,
@@ -296,12 +313,11 @@ class FileService {
       createdAt: DateTime.now(),
     );
     final id =
-    await DatabaseService.insertFile(fileModel);
+        await DatabaseService.insertFile(fileModel);
     onProgress(1.0);
 
-    // NOTE: deleteOriginal is now handled by
-    // _handleDeleteOriginal() in the upload screen
-    // using the new gallery flow — not here
+    // NOTE: deleteOriginal is handled separately
+    // using requestOfficialDelete() after upload
 
     return fileModel.copyWith(id: id);
   }
@@ -311,7 +327,7 @@ class FileService {
       String userId) async {
     try {
       final appDir =
-      await getApplicationDocumentsDirectory();
+          await getApplicationDocumentsDirectory();
       final vaultDir = Directory(
           p.join(appDir.path, 'vault', userId));
       if (await vaultDir.exists()) {
@@ -347,9 +363,9 @@ class FileService {
   static Future<File> decryptToTemp(
       FileModel file) async {
     final encryptedBytes =
-    await File(file.encryptedPath).readAsBytes();
+        await File(file.encryptedPath).readAsBytes();
     final decryptedBytes =
-    EncryptionService.decryptFile(encryptedBytes);
+        EncryptionService.decryptFile(encryptedBytes);
     final tempDir = await getTemporaryDirectory();
     final ext = _mimeToExt(file.mimeType);
     final tempFile = File(p.join(
@@ -398,24 +414,28 @@ class FileService {
   static Future<void> exportFile(
       FileModel file, File tempFile) async {
     final isImage =
-    file.mimeType.startsWith('image/');
+        file.mimeType.startsWith('image/');
     final isVideo =
-    file.mimeType.startsWith('video/');
+        file.mimeType.startsWith('video/');
+
     String savedPath;
 
     if (isImage || isVideo) {
       final directory = isImage
           ? Directory(
-          '/storage/emulated/0/Pictures/SafeLocker')
+              '/storage/emulated/0/Pictures/SafeLocker')
           : Directory(
-          '/storage/emulated/0/Movies/SafeLocker');
+              '/storage/emulated/0/Movies/SafeLocker');
+
       if (!await directory.exists()) {
         await directory.create(recursive: true);
       }
+
       final ext = file.mimeType.split('/').last;
       savedPath =
-      '${directory.path}/${file.displayName}.$ext';
+          '${directory.path}/${file.displayName}.$ext';
       await tempFile.copy(savedPath);
+
       if (Platform.isAndroid) {
         try {
           await PhotoManager.editor.saveImageWithPath(
@@ -428,13 +448,13 @@ class FileService {
       }
     } else {
       final downloadsDir =
-      Directory('/storage/emulated/0/Download');
+          Directory('/storage/emulated/0/Download');
       if (!await downloadsDir.exists()) {
         await downloadsDir.create(recursive: true);
       }
       final ext = file.mimeType.split('/').last;
       savedPath =
-      '${downloadsDir.path}/${file.displayName}.$ext';
+          '${downloadsDir.path}/${file.displayName}.$ext';
       await tempFile.copy(savedPath);
     }
     await OpenFilex.open(savedPath);
@@ -444,7 +464,7 @@ class FileService {
   static Future<void> renameFile(
       FileModel file, String newName) async {
     final updated =
-    file.copyWith(displayName: newName);
+        file.copyWith(displayName: newName);
     await DatabaseService.updateFile(updated);
   }
 
